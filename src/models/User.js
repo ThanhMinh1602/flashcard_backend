@@ -3,15 +3,51 @@ import bcrypt from 'bcryptjs';
 
 const userSchema = new mongoose.Schema(
   {
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password: { type: String, required: true, minlength: 6, select: false },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
+
+    password: {
+      type: String,
+      required: true,
+      minlength: 6,
+      select: false,
+    },
+
+    resetPasswordOtp: {
+      type: String,
+      select: false,
+    },
+
+    resetPasswordOtpExpires: {
+      type: Date,
+      select: false,
+    },
+
+    resetPasswordOtpVerified: {
+      type: Boolean,
+      default: false,
+      select: false,
+    },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 userSchema.pre('save', async function hashPassword(next) {
   if (!this.isModified('password')) return next();
+
   this.password = await bcrypt.hash(this.password, 12);
+
+  if (this.isModified('password')) {
+    this.resetPasswordOtp = undefined;
+    this.resetPasswordOtpExpires = undefined;
+    this.resetPasswordOtpVerified = false;
+  }
+
   next();
 });
 
