@@ -6,11 +6,12 @@ const packageSchema = new mongoose.Schema(
     name: { type: String, default: '', trim: true },
     description: { type: String, default: '', trim: true },
     backgroundPairId: { type: String, default: '1' },
+    deletedAt: { type: Date, default: null, index: true },
   },
   { timestamps: true }
 );
 
-packageSchema.index({ userId: 1, createdAt: -1 });
+packageSchema.index({ userId: 1, deletedAt: 1, createdAt: -1 });
 
 packageSchema.methods.toClient = function toClient() {
   return {
@@ -18,6 +19,7 @@ packageSchema.methods.toClient = function toClient() {
     name: this.name,
     description: this.description,
     backgroundPairId: this.backgroundPairId,
+    deletedAt: this.deletedAt,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

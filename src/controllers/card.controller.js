@@ -7,7 +7,83 @@ async function ensurePackage(userId, packageId) {
   return Package.findOne({
     _id: packageId,
     userId,
+    deletedAt: null,
   });
+}
+
+async function removeStoredCanvasData(userId, packageId) {
+  const cards = await Card.find({
+    userId,
+    packageId,
+    $or: [
+      { 'front.canvasData': { $exists: true } },
+      { 'back.canvasData': { $exists: true } },
+    ],
+  }).select('front.canvasData back.canvasData');
+
+  const operations = cards
+    .map((card) => {
+      const frontCanvasData = sanitizeCanvasData(card.front?.canvasData);
+      const backCanvasData = sanitizeCanvasData(card.back?.canvasData);
+      const update = { $set: {}, $unset: {} };
+
+      if (frontCanvasData) {
+        update.$set['front.canvasData'] = frontCanvasData;
+      } else if (card.front?.canvasData) {
+        update.$unset['front.canvasData'] = '';
+      }
+
+      if (backCanvasData) {
+        update.$set['back.canvasData'] = backCanvasData;
+      } else if (card.back?.canvasData) {
+        update.$unset['back.canvasData'] = '';
+      }
+
+      if (Object.keys(update.$set).length === 0) delete update.$set;
+      if (Object.keys(update.$unset).length === 0) delete update.$unset;
+      if (!update.$set && !update.$unset) return null;
+
+      return {
+        updateOne: {
+          filter: { _id: card._id },
+          update,
+        },
+      };
+    })
+    .filter(Boolean);
+
+  if (operations.length > 0) {
+    await Card.bulkWrite(operations);
+  }
+}
+
+function sanitizeCanvasData(canvasData) {
+  if (!canvasData) return null;
+
+  let parsed = canvasData;
+
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!Array.isArray(parsed)) return null;
+
+  const imageActions = parsed
+    .filter((action) => action?.type === 'image' && action.dataUrl)
+    .map((action) => ({
+      type: 'image',
+      dataUrl: action.dataUrl,
+      x: Number(action.x) || 0,
+      y: Number(action.y) || 0,
+      width: Math.max(1, Number(action.width) || 1),
+      height: Math.max(1, Number(action.height) || 1),
+    }));
+
+  return imageActions.length > 0 ? JSON.stringify(imageActions) : null;
 }
 
 function parseSideDocId(sideDocId = '') {
@@ -33,6 +109,8 @@ function cleanPayload(body = {}) {
   delete payload.createdAt;
   delete payload.updatedAt;
   delete payload.__v;
+
+  payload.canvasData = sanitizeCanvasData(body.canvasData);
 
   return payload;
 }
@@ -210,18 +288,134 @@ export const getFlashcards = asyncHandler(async (req, res) => {
     });
   }
 
-  const cards = await Card.find({
+  await removeStoredCanvasData(req.user._id, req.params.packageId);
+
+  const filter = {
     userId: req.user._id,
     packageId: req.params.packageId,
-  }).sort({
+  };
+
+  const hasPaginationQuery =
+    req.query.limit !== undefined || req.query.offset !== undefined;
+
+  const query = Card.find(filter).sort({
     updatedAt: 1,
   });
+
+  let pagination = null;
+
+  if (hasPaginationQuery) {
+    const limit = Math.min(
+      10,
+      Math.max(1, Number.parseInt(req.query.limit, 10) || 10),
+    );
+    const offset = Math.max(0, Number.parseInt(req.query.offset, 10) || 0);
+
+    query.skip(offset).limit(limit);
+
+    const total = await Card.countDocuments(filter);
+    pagination = {
+      limit,
+      offset,
+      total,
+      hasMore: offset + limit < total,
+      nextOffset: Math.min(offset + limit, total),
+    };
+  }
+
+  const cards = await query;
 
   const result = cards.flatMap((card) => {
     return [card.toSideClient('front'), card.toSideClient('back')];
   });
 
+  if (pagination) {
+    return ok(res, {
+      items: result,
+      pagination,
+    });
+  }
+
   return ok(res, result);
+});
+
+export const getFlashcardSummaries = asyncHandler(async (req, res) => {
+  const pkg = await ensurePackage(req.user._id, req.params.packageId);
+
+  if (!pkg) {
+    return res.status(404).json({
+      success: false,
+      message: 'Package not found',
+    });
+  }
+
+  await removeStoredCanvasData(req.user._id, req.params.packageId);
+
+  const filter = {
+    userId: req.user._id,
+    packageId: req.params.packageId,
+  };
+
+  const limit = Math.min(
+    10,
+    Math.max(1, Number.parseInt(req.query.limit, 10) || 10),
+  );
+  const offset = Math.max(0, Number.parseInt(req.query.offset, 10) || 0);
+
+  const [cards, total] = await Promise.all([
+    Card.find(filter)
+      .select('localId front.backgroundPairId back.backgroundPairId createdAt updatedAt')
+      .sort({ updatedAt: 1 })
+      .skip(offset)
+      .limit(limit),
+    Card.countDocuments(filter),
+  ]);
+
+  return ok(res, {
+    items: cards.map((card) => ({
+      id: card.localId,
+      localId: card.localId,
+      backgroundPairId:
+        card.front?.backgroundPairId || card.back?.backgroundPairId || '1',
+      createdAt: card.createdAt,
+      updatedAt: card.updatedAt,
+    })),
+    pagination: {
+      limit,
+      offset,
+      total,
+      hasMore: offset + limit < total,
+      nextOffset: Math.min(offset + limit, total),
+    },
+  });
+});
+
+export const getFlashcardPair = asyncHandler(async (req, res) => {
+  const pkg = await ensurePackage(req.user._id, req.params.packageId);
+
+  if (!pkg) {
+    return res.status(404).json({
+      success: false,
+      message: 'Package not found',
+    });
+  }
+
+  await removeStoredCanvasData(req.user._id, req.params.packageId);
+
+  const card = await Card.findOne({
+    userId: req.user._id,
+    packageId: req.params.packageId,
+    localId: req.params.localId,
+  });
+
+  if (!card) {
+    return res.status(404).json({
+      success: false,
+      message: 'Card pair not found',
+    });
+  }
+
+  return ok(res, card.toPairClient());
 });
 
 // GET dạng pair nếu sau này bạn muốn dùng UI mới.
@@ -236,6 +430,8 @@ export const getFlashcardPairs = asyncHandler(async (req, res) => {
       message: 'Package not found',
     });
   }
+
+  await removeStoredCanvasData(req.user._id, req.params.packageId);
 
   const cards = await Card.find({
     userId: req.user._id,

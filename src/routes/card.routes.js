@@ -2,6 +2,8 @@ import { Router } from 'express';
 import {
   bulkSaveCards,
   deleteFlashcardPair,
+  getFlashcardPair,
+  getFlashcardSummaries,
   getFlashcards,
   saveCardSide,
 } from '../controllers/card.controller.js';
@@ -35,6 +37,8 @@ router.use(authRequired);
  *         description: Không tìm thấy package
  */
 router.get('/', getFlashcards);
+router.get('/summary', getFlashcardSummaries);
+router.get('/pair/:localId', getFlashcardPair);
 
 /**
  * @swagger

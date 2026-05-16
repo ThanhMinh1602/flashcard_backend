@@ -27,6 +27,11 @@ const resetPasswordSchema = z.object({
   newPassword: z.string().min(6, 'Password must be at least 6 characters'),
 });
 
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required'),
+  newPassword: z.string().min(6, 'Password must be at least 6 characters'),
+});
+
 function generateOtp() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -206,4 +211,22 @@ export const resetPassword = asyncHandler(async (req, res) => {
   await user.save();
 
   return ok(res, null, 'Password reset successfully');
+});
+
+export const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+
+  const user = await User.findById(req.user._id).select('+password');
+
+  if (!user || !(await user.comparePassword(currentPassword))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Current password is incorrect',
+    });
+  }
+
+  user.password = newPassword;
+  await user.save();
+
+  return ok(res, null, 'Password changed successfully');
 });

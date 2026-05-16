@@ -56,21 +56,63 @@ cardSchema.index({ userId: 1, packageId: 1, localId: 1 });
 cardSchema.index({ userId: 1, packageId: 1, sideDocId: 1 }, { unique: true });
 cardSchema.index({ userId: 1, packageId: 1, updatedAt: 1 });
 
+function sanitizeCanvasData(canvasData) {
+  if (!canvasData) return null;
+
+  let parsed = canvasData;
+
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!Array.isArray(parsed)) return null;
+
+  const imageActions = parsed
+    .filter((action) => action?.type === 'image' && action.dataUrl)
+    .map((action) => ({
+      type: 'image',
+      dataUrl: action.dataUrl,
+      x: Number(action.x) || 0,
+      y: Number(action.y) || 0,
+      width: Math.max(1, Number(action.width) || 1),
+      height: Math.max(1, Number(action.height) || 1),
+    }));
+
+  return imageActions.length > 0 ? JSON.stringify(imageActions) : null;
+}
+
+function toClientSideData(data = {}) {
+  const clientData = { ...(data || {}) };
+  const canvasData = sanitizeCanvasData(clientData.canvasData);
+
+  if (canvasData) {
+    clientData.canvasData = canvasData;
+  } else {
+    delete clientData.canvasData;
+  }
+
+  return clientData;
+}
+
 cardSchema.methods.toPairClient = function toPairClient() {
   return {
     id: this.localId,
     localId: this.localId,
     userId: this.userId.toString(),
     packageId: this.packageId.toString(),
-    front: this.front || {},
-    back: this.back || {},
+    front: toClientSideData(this.front),
+    back: toClientSideData(this.back),
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };
 };
 
 cardSchema.methods.toSideClient = function toSideClient(side) {
-  const data = side === 'back' ? this.back || {} : this.front || {};
+  const data = toClientSideData(side === 'back' ? this.back : this.front);
 
   return {
     id: `${this.localId}_${side}`,

@@ -10,7 +10,19 @@ const packageSchema = z.object({
 });
 
 export const getPackages = asyncHandler(async (req, res) => {
-  const packages = await Package.find({ userId: req.user._id }).sort({ createdAt: -1 });
+  const packages = await Package.find({
+    userId: req.user._id,
+    deletedAt: null,
+  }).sort({ createdAt: -1 });
+  return ok(res, packages.map((item) => item.toClient()));
+});
+
+export const getDeletedPackages = asyncHandler(async (req, res) => {
+  const packages = await Package.find({
+    userId: req.user._id,
+    deletedAt: { $ne: null },
+  }).sort({ deletedAt: -1 });
+
   return ok(res, packages.map((item) => item.toClient()));
 });
 
@@ -28,7 +40,7 @@ export const createPackage = asyncHandler(async (req, res) => {
 export const updatePackage = asyncHandler(async (req, res) => {
   const body = packageSchema.parse(req.body);
   const pkg = await Package.findOneAndUpdate(
-    { _id: req.params.packageId, userId: req.user._id },
+    { _id: req.params.packageId, userId: req.user._id, deletedAt: null },
     { name: body.name?.trim() || '', description: body.description?.trim() || '' },
     { new: true }
   );
@@ -39,7 +51,7 @@ export const updatePackage = asyncHandler(async (req, res) => {
 export const updatePackageBackground = asyncHandler(async (req, res) => {
   const backgroundPairId = String(req.body.backgroundPairId || '1');
   const pkg = await Package.findOneAndUpdate(
-    { _id: req.params.packageId, userId: req.user._id },
+    { _id: req.params.packageId, userId: req.user._id, deletedAt: null },
     { backgroundPairId },
     { new: true }
   );
@@ -48,8 +60,35 @@ export const updatePackageBackground = asyncHandler(async (req, res) => {
 });
 
 export const deletePackage = asyncHandler(async (req, res) => {
-  const pkg = await Package.findOneAndDelete({ _id: req.params.packageId, userId: req.user._id });
+  const pkg = await Package.findOneAndUpdate(
+    { _id: req.params.packageId, userId: req.user._id, deletedAt: null },
+    { deletedAt: new Date() },
+    { new: true }
+  );
   if (!pkg) return res.status(404).json({ success: false, message: 'Package not found' });
+  return ok(res, pkg.toClient(), 'Package moved to trash');
+});
+
+export const restorePackage = asyncHandler(async (req, res) => {
+  const pkg = await Package.findOneAndUpdate(
+    { _id: req.params.packageId, userId: req.user._id, deletedAt: { $ne: null } },
+    { deletedAt: null },
+    { new: true }
+  );
+
+  if (!pkg) return res.status(404).json({ success: false, message: 'Package not found' });
+  return ok(res, pkg.toClient(), 'Package restored');
+});
+
+export const permanentlyDeletePackage = asyncHandler(async (req, res) => {
+  const pkg = await Package.findOneAndDelete({
+    _id: req.params.packageId,
+    userId: req.user._id,
+    deletedAt: { $ne: null },
+  });
+
+  if (!pkg) return res.status(404).json({ success: false, message: 'Package not found' });
+
   await Card.deleteMany({ userId: req.user._id, packageId: req.params.packageId });
-  return ok(res, null, 'Package deleted');
+  return ok(res, null, 'Package permanently deleted');
 });

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import {
+  changePassword,
   forgotPassword,
   login,
   me,
@@ -80,6 +81,7 @@ router.post('/login', login);
  *         description: Successfully fetched current user
  */
 router.get('/me', authRequired, me);
+router.patch('/change-password', authRequired, changePassword);
 
 /**
  * @swagger

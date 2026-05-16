@@ -2,7 +2,10 @@ import { Router } from 'express';
 import {
   createPackage,
   deletePackage,
+  getDeletedPackages,
   getPackages,
+  permanentlyDeletePackage,
+  restorePackage,
   updatePackage,
   updatePackageBackground,
 } from '../controllers/package.controller.js';
@@ -37,6 +40,10 @@ router.use(authRequired);
  *       201: { description: Created }
  */
 router.route('/').get(getPackages).post(createPackage);
+
+router.get('/trash', getDeletedPackages);
+router.patch('/:packageId/restore', restorePackage);
+router.delete('/:packageId/permanent', permanentlyDeletePackage);
 
 /**
  * @swagger
