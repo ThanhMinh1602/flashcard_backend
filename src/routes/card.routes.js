@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import {
+  bulkSaveCards,
   deleteFlashcardPair,
   getFlashcards,
   saveCardSide,
 } from '../controllers/card.controller.js';
 import { authRequired } from '../middlewares/auth.js';
 
-const router = Router({ mergeParams: true });
+const router = Router({
+  mergeParams: true,
+});
 
 router.use(authRequired);
 
@@ -35,6 +38,47 @@ router.get('/', getFlashcards);
 
 /**
  * @swagger
+ * /api/packages/{packageId}/cards/bulk:
+ *   put:
+ *     tags: [Cards]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Save many card pairs
+ *     description: Saves only changed cards in one request. Each item contains localId, front and back.
+ *     parameters:
+ *       - in: path
+ *         name: packageId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID của package
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               cards:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     localId:
+ *                       type: string
+ *                     front:
+ *                       type: object
+ *                     back:
+ *                       type: object
+ *     responses:
+ *       200:
+ *         description: Lưu danh sách thẻ thành công
+ *       404:
+ *         description: Không tìm thấy package
+ */
+router.put('/bulk', bulkSaveCards);
+
+/**
+ * @swagger
  * /api/packages/{packageId}/cards/{sideDocId}:
  *   put:
  *     tags: [Cards]
@@ -60,7 +104,7 @@ router.get('/', getFlashcards);
  *         application/json:
  *           schema:
  *             type: object
- *             description: Dữ liệu của thẻ (front hoặc back)
+ *             description: Dữ liệu của thẻ front hoặc back
  *     responses:
  *       200:
  *         description: Lưu thẻ thành công
@@ -88,7 +132,7 @@ router.put('/:sideDocId', saveCardSide);
  *         required: true
  *         schema:
  *           type: string
- *         description: ID chung của cặp thẻ (VD 1715830000000)
+ *         description: ID chung của cặp thẻ, ví dụ 1715830000000
  *     responses:
  *       200:
  *         description: Xóa cặp thẻ thành công

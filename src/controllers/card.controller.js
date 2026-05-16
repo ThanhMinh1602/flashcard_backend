@@ -12,7 +12,6 @@ async function ensurePackage(userId, packageId) {
 
 function parseSideDocId(sideDocId = '') {
   const value = String(sideDocId);
-
   const match = value.match(/^(.*)_(front|back)$/);
 
   return {
@@ -62,9 +61,7 @@ export const saveCardSide = asyncHandler(async (req, res) => {
   }
 
   const sideDocId = req.params.sideDocId;
-
   const { localId, side } = parseSideDocId(sideDocId);
-
   const payload = cleanPayload(req.body);
 
   const updateData = {
@@ -97,6 +94,100 @@ export const saveCardSide = asyncHandler(async (req, res) => {
   );
 
   return ok(res, card.toSideClient(side), 'Card saved');
+});
+
+// PUT /api/packages/:packageId/cards/bulk
+//
+// Lưu nhiều cặp thẻ trong 1 request.
+// Dùng cho nút "Lưu tất cả" để chỉ lưu những card đã thay đổi.
+export const bulkSaveCards = asyncHandler(async (req, res) => {
+  const pkg = await ensurePackage(req.user._id, req.params.packageId);
+
+  if (!pkg) {
+    return res.status(404).json({
+      success: false,
+      message: 'Package not found',
+    });
+  }
+
+  const { cards = [] } = req.body;
+
+  if (!Array.isArray(cards)) {
+    return res.status(400).json({
+      success: false,
+      message: 'cards must be an array',
+    });
+  }
+
+  if (cards.length === 0) {
+    return ok(
+      res,
+      {
+        savedCount: 0,
+        cards: [],
+      },
+      'No cards to save',
+    );
+  }
+
+  const operations = cards
+    .filter((card) => card?.localId)
+    .map((card) => {
+      const localId = String(card.localId);
+      const frontPayload = cleanPayload(card.front || {});
+      const backPayload = cleanPayload(card.back || {});
+
+      return {
+        updateOne: {
+          filter: {
+            userId: req.user._id,
+            packageId: req.params.packageId,
+            localId,
+          },
+          update: {
+            $set: {
+              userId: req.user._id,
+              packageId: req.params.packageId,
+              localId,
+              sideDocId: `${localId}_pair`,
+              front: frontPayload,
+              back: backPayload,
+            },
+          },
+          upsert: true,
+        },
+      };
+    });
+
+  if (operations.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'No valid cards to save',
+    });
+  }
+
+  await Card.bulkWrite(operations);
+
+  const localIds = cards
+    .map((card) => (card?.localId ? String(card.localId) : null))
+    .filter(Boolean);
+
+  const savedCards = await Card.find({
+    userId: req.user._id,
+    packageId: req.params.packageId,
+    localId: {
+      $in: localIds,
+    },
+  }).sort({ updatedAt: 1 });
+
+  return ok(
+    res,
+    {
+      savedCount: savedCards.length,
+      cards: savedCards.map((card) => card.toPairClient()),
+    },
+    'Cards saved',
+  );
 });
 
 // GET /api/packages/:packageId/cards
