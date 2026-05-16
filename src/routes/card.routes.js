@@ -7,6 +7,7 @@ import {
 import { authRequired } from '../middlewares/auth.js';
 
 const router = Router({ mergeParams: true });
+
 router.use(authRequired);
 
 /**
@@ -16,14 +17,19 @@ router.use(authRequired);
  *     tags: [Cards]
  *     security: [{ bearerAuth: [] }]
  *     summary: Get cards in package
+ *     description: Returns card sides for frontend compatibility, but MongoDB stores each front/back pair in one document.
  *     parameters:
  *       - in: path
  *         name: packageId
  *         required: true
- *         schema: { type: string }
+ *         schema:
+ *           type: string
+ *         description: ID của package
  *     responses:
- *       200: { description: Success }
- *       404: { description: Package not found }
+ *       200:
+ *         description: Lấy danh sách thẻ thành công
+ *       404:
+ *         description: Không tìm thấy package
  */
 router.get('/', getFlashcards);
 
@@ -33,31 +39,33 @@ router.get('/', getFlashcards);
  *   put:
  *     tags: [Cards]
  *     security: [{ bearerAuth: [] }]
- *     summary: Save one card side (e.g. localId_front or localId_back)
- *     description: Mọi dữ liệu gửi trong body sẽ được lưu vào trường `data` của thẻ (tự động loại bỏ userId, packageId, createdAt, updatedAt).
+ *     summary: Save one card side into one pair document
+ *     description: sideDocId should be localId_front or localId_back. Backend stores both sides in one MongoDB document.
  *     parameters:
  *       - in: path
  *         name: packageId
  *         required: true
- *         schema: { type: string }
+ *         schema:
+ *           type: string
+ *         description: ID của package
  *       - in: path
  *         name: sideDocId
  *         required: true
- *         schema: { type: string }
- *         description: Format thường là "id_front" hoặc "id_back"
+ *         schema:
+ *           type: string
+ *         description: Định dạng localId_front hoặc localId_back
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             properties:
- *               content: { type: string, example: "Hello" }
- *               type: { type: string, example: "text" }
- *               color: { type: string, example: "#000000" }
+ *             description: Dữ liệu của thẻ (front hoặc back)
  *     responses:
- *       200: { description: Card saved }
- *       404: { description: Package not found }
+ *       200:
+ *         description: Lưu thẻ thành công
+ *       404:
+ *         description: Không tìm thấy package
  */
 router.put('/:sideDocId', saveCardSide);
 
@@ -67,19 +75,25 @@ router.put('/:sideDocId', saveCardSide);
  *   delete:
  *     tags: [Cards]
  *     security: [{ bearerAuth: [] }]
- *     summary: Delete front and back by localId
+ *     summary: Delete one flashcard pair by localId
  *     parameters:
  *       - in: path
  *         name: packageId
  *         required: true
- *         schema: { type: string }
+ *         schema:
+ *           type: string
+ *         description: ID của package
  *       - in: path
  *         name: localId
  *         required: true
- *         schema: { type: string }
+ *         schema:
+ *           type: string
+ *         description: ID chung của cặp thẻ (VD 1715830000000)
  *     responses:
- *       200: { description: Card pair deleted }
- *       404: { description: Package not found }
+ *       200:
+ *         description: Xóa cặp thẻ thành công
+ *       404:
+ *         description: Không tìm thấy package
  */
 router.delete('/pair/:localId', deleteFlashcardPair);
 
