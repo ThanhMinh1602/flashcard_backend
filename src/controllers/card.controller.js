@@ -72,18 +72,40 @@ function sanitizeCanvasData(canvasData) {
 
   if (!Array.isArray(parsed)) return null;
 
-  const imageActions = parsed
-    .filter((action) => action?.type === 'image' && action.dataUrl)
-    .map((action) => ({
-      type: 'image',
-      dataUrl: action.dataUrl,
-      x: Number(action.x) || 0,
-      y: Number(action.y) || 0,
-      width: Math.max(1, Number(action.width) || 1),
-      height: Math.max(1, Number(action.height) || 1),
-    }));
+  const sanitizedActions = parsed
+    .map((action) => {
+      if (action?.type === 'image' && action.dataUrl) {
+        return {
+          type: 'image',
+          dataUrl: action.dataUrl,
+          x: Number(action.x) || 0,
+          y: Number(action.y) || 0,
+          width: Math.max(1, Number(action.width) || 1),
+          height: Math.max(1, Number(action.height) || 1),
+        };
+      }
 
-  return imageActions.length > 0 ? JSON.stringify(imageActions) : null;
+      if (action?.type === 'stroke' && Array.isArray(action.points)) {
+        return {
+          type: 'stroke',
+          tool: action.tool || 'brush',
+          brushType: action.brushType || 'pen',
+          color: action.color || '#0f172a',
+          size: Number(action.size) || 4,
+          opacity: Number(action.opacity) || 1,
+          points: action.points.map((point) => [
+            Number(point[0]) || 0,
+            Number(point[1]) || 0,
+            Number(point[2]) || 1,
+          ]),
+        };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+
+  return sanitizedActions.length > 0 ? JSON.stringify(sanitizedActions) : null;
 }
 
 function parseSideDocId(sideDocId = '') {
