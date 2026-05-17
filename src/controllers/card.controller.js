@@ -118,6 +118,16 @@ function parseSideDocId(sideDocId = '') {
   };
 }
 
+function normalizeSortOrder(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+const cardOrderSort = {
+  sortOrder: 1,
+  createdAt: 1,
+};
+
 function cleanPayload(body = {}) {
   const payload = { ...body };
 
@@ -163,6 +173,7 @@ export const saveCardSide = asyncHandler(async (req, res) => {
   const sideDocId = req.params.sideDocId;
   const { localId, side } = parseSideDocId(sideDocId);
   const payload = cleanPayload(req.body);
+  const nextSortOrder = normalizeSortOrder(req.body?.sortOrder, null);
 
   const updateData = {
     userId: req.user._id,
@@ -170,6 +181,10 @@ export const saveCardSide = asyncHandler(async (req, res) => {
     localId,
     sideDocId: `${localId}_pair`,
   };
+
+  if (nextSortOrder !== null) {
+    updateData.sortOrder = nextSortOrder;
+  }
 
   if (side === 'back') {
     updateData.back = payload;
@@ -230,12 +245,18 @@ export const bulkSaveCards = asyncHandler(async (req, res) => {
     );
   }
 
+  const existingCount = await Card.countDocuments({
+    userId: req.user._id,
+    packageId: req.params.packageId,
+  });
+
   const operations = cards
     .filter((card) => card?.localId)
-    .map((card) => {
+    .map((card, index) => {
       const localId = String(card.localId);
       const frontPayload = cleanPayload(card.front || {});
       const backPayload = cleanPayload(card.back || {});
+      const sortOrder = normalizeSortOrder(card.sortOrder, existingCount + index);
 
       return {
         updateOne: {
@@ -252,6 +273,7 @@ export const bulkSaveCards = asyncHandler(async (req, res) => {
               sideDocId: `${localId}_pair`,
               front: frontPayload,
               back: backPayload,
+              sortOrder,
             },
           },
           upsert: true,
@@ -278,7 +300,7 @@ export const bulkSaveCards = asyncHandler(async (req, res) => {
     localId: {
       $in: localIds,
     },
-  }).sort({ updatedAt: 1 });
+  }).sort(cardOrderSort);
 
   return ok(
     res,
@@ -320,9 +342,7 @@ export const getFlashcards = asyncHandler(async (req, res) => {
   const hasPaginationQuery =
     req.query.limit !== undefined || req.query.offset !== undefined;
 
-  const query = Card.find(filter).sort({
-    updatedAt: 1,
-  });
+  const query = Card.find(filter).sort(cardOrderSort);
 
   let pagination = null;
 
@@ -386,8 +406,8 @@ export const getFlashcardSummaries = asyncHandler(async (req, res) => {
 
   const [cards, total] = await Promise.all([
     Card.find(filter)
-      .select('localId front.backgroundPairId back.backgroundPairId createdAt updatedAt')
-      .sort({ updatedAt: 1 })
+      .select('localId sortOrder front.backgroundPairId back.backgroundPairId createdAt updatedAt')
+      .sort(cardOrderSort)
       .skip(offset)
       .limit(limit),
     Card.countDocuments(filter),
@@ -399,6 +419,7 @@ export const getFlashcardSummaries = asyncHandler(async (req, res) => {
       localId: card.localId,
       backgroundPairId:
         card.front?.backgroundPairId || card.back?.backgroundPairId || '1',
+      sortOrder: card.sortOrder,
       createdAt: card.createdAt,
       updatedAt: card.updatedAt,
     })),
@@ -458,13 +479,80 @@ export const getFlashcardPairs = asyncHandler(async (req, res) => {
   const cards = await Card.find({
     userId: req.user._id,
     packageId: req.params.packageId,
-  }).sort({
-    updatedAt: 1,
-  });
+  }).sort(cardOrderSort);
 
   return ok(
     res,
     cards.map((card) => card.toPairClient()),
+  );
+});
+
+export const reorderFlashcards = asyncHandler(async (req, res) => {
+  const pkg = await ensurePackage(req.user._id, req.params.packageId);
+
+  if (!pkg) {
+    return res.status(404).json({
+      success: false,
+      message: 'Package not found',
+    });
+  }
+
+  const { orderedLocalIds = [] } = req.body;
+
+  if (!Array.isArray(orderedLocalIds)) {
+    return res.status(400).json({
+      success: false,
+      message: 'orderedLocalIds must be an array',
+    });
+  }
+
+  const normalizedLocalIds = [
+    ...new Set(
+      orderedLocalIds
+        .map((localId) => String(localId || '').trim())
+        .filter(Boolean),
+    ),
+  ];
+
+  if (normalizedLocalIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'orderedLocalIds is required',
+    });
+  }
+
+  const operations = normalizedLocalIds.map((localId, index) => ({
+    updateOne: {
+      filter: {
+        userId: req.user._id,
+        packageId: req.params.packageId,
+        localId,
+      },
+      update: {
+        $set: {
+          sortOrder: index,
+        },
+      },
+    },
+  }));
+
+  await Card.bulkWrite(operations);
+
+  const cards = await Card.find({
+    userId: req.user._id,
+    packageId: req.params.packageId,
+    localId: {
+      $in: normalizedLocalIds,
+    },
+  }).sort(cardOrderSort);
+
+  return ok(
+    res,
+    {
+      savedCount: cards.length,
+      cards: cards.map((card) => card.toPairClient()),
+    },
+    'Card order saved',
   );
 });
 

@@ -43,6 +43,12 @@ const cardSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+
+    sortOrder: {
+      type: Number,
+      default: null,
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -55,6 +61,7 @@ const cardSchema = new mongoose.Schema(
 cardSchema.index({ userId: 1, packageId: 1, localId: 1 });
 cardSchema.index({ userId: 1, packageId: 1, sideDocId: 1 }, { unique: true });
 cardSchema.index({ userId: 1, packageId: 1, updatedAt: 1 });
+cardSchema.index({ userId: 1, packageId: 1, sortOrder: 1, createdAt: 1 });
 
 function sanitizeCanvasData(canvasData) {
   if (!canvasData) return null;
@@ -128,6 +135,7 @@ cardSchema.methods.toPairClient = function toPairClient() {
     packageId: this.packageId.toString(),
     front: toClientSideData(this.front),
     back: toClientSideData(this.back),
+    sortOrder: this.sortOrder,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };
@@ -143,6 +151,7 @@ cardSchema.methods.toSideClient = function toSideClient(side) {
     packageId: this.packageId.toString(),
     localId: this.localId,
     side,
+    sortOrder: this.sortOrder,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

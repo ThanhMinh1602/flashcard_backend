@@ -5,6 +5,7 @@ import {
   getFlashcardPair,
   getFlashcardSummaries,
   getFlashcards,
+  reorderFlashcards,
   saveCardSide,
 } from '../controllers/card.controller.js';
 import { authRequired } from '../middlewares/auth.js';
@@ -39,6 +40,7 @@ router.use(authRequired);
 router.get('/', getFlashcards);
 router.get('/summary', getFlashcardSummaries);
 router.get('/pair/:localId', getFlashcardPair);
+router.patch('/reorder', reorderFlashcards);
 
 /**
  * @swagger
