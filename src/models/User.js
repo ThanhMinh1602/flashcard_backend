@@ -33,6 +33,13 @@ const userSchema = new mongoose.Schema(
       default: false,
       select: false,
     },
+
+    role: {
+      type: String,
+      enum: ['user', 'admin'],
+      default: 'user',
+      index: true,
+    },
   },
   { timestamps: true },
 );
@@ -60,6 +67,7 @@ userSchema.methods.toClient = function toClient() {
     id: this._id.toString(),
     uid: this._id.toString(),
     email: this.email,
+    role: this.role || 'user',
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

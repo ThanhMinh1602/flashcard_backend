@@ -3,6 +3,12 @@ import Package from '../models/Package.js';
 import Card from '../models/Card.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { created, ok } from '../utils/response.js';
+import {
+  getCardImageFolder,
+  getPackageImageFolder,
+  deleteImagesByPrefix,
+  deleteFolderIfEmpty,
+} from '../services/cloudinary.service.js';
 
 const packageSchema = z.object({
   name: z.string().optional().default(''),
@@ -88,6 +94,27 @@ export const permanentlyDeletePackage = asyncHandler(async (req, res) => {
   });
 
   if (!pkg) return res.status(404).json({ success: false, message: 'Package not found' });
+
+  const cards = await Card.find({
+    userId: req.user._id,
+    packageId: req.params.packageId,
+  }).select('_id');
+
+  await Promise.all(
+    cards.map(async (card) => {
+      const cardFolder = getCardImageFolder(
+        req.user._id.toString(),
+        req.params.packageId,
+        card._id.toString(),
+      );
+
+      await deleteImagesByPrefix(cardFolder);
+      await deleteFolderIfEmpty(cardFolder);
+    }),
+  );
+  await deleteFolderIfEmpty(
+    getPackageImageFolder(req.user._id.toString(), req.params.packageId),
+  );
 
   await Card.deleteMany({ userId: req.user._id, packageId: req.params.packageId });
   return ok(res, null, 'Package permanently deleted');

@@ -1,7 +1,16 @@
+import mongoose from 'mongoose';
 import Package from '../models/Package.js';
 import Card from '../models/Card.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/response.js';
+import {
+  deleteImagesByPrefix,
+  deleteFolderIfEmpty,
+  destroyPublicIds,
+  getCardImageFolder,
+  getPackageImageFolder,
+  uploadImageBuffer,
+} from '../services/cloudinary.service.js';
 
 async function ensurePackage(userId, packageId) {
   return Package.findOne({
@@ -118,6 +127,81 @@ function parseSideDocId(sideDocId = '') {
   };
 }
 
+function parseJsonField(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value !== 'string') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function parseCardsFromRequest(req) {
+  return parseJsonField(req.body?.cards, []);
+}
+
+function parseDrawingMetaFromRequest(req) {
+  const meta = parseJsonField(req.body?.drawingMeta, []);
+  return Array.isArray(meta) ? meta : [];
+}
+
+function getSidePayload(card, side) {
+  if (!card[side] || typeof card[side] !== 'object') {
+    card[side] = {};
+  }
+
+  return card[side];
+}
+
+function getCloudinarySideName(side) {
+  return side === 'back' ? 'cardback' : 'cardfront';
+}
+
+async function applyDrawingUploads({
+  files = [],
+  drawingMeta = [],
+  cards = [],
+  userId,
+  packageId,
+  existingCardMap,
+  cardMongoIdMap,
+}) {
+  if (!files.length || !drawingMeta.length) return;
+
+  for (const [fallbackIndex, meta] of drawingMeta.entries()) {
+    const fileIndex = Number.isInteger(meta?.fileIndex)
+      ? meta.fileIndex
+      : fallbackIndex;
+    const file = files[fileIndex];
+    const side = meta?.side === 'back' ? 'back' : 'front';
+    const localId = String(meta?.localId || '').trim();
+
+    if (!file || !localId) continue;
+
+    const targetCard = cards.find((card) => String(card?.localId) === localId);
+    if (!targetCard) continue;
+
+    const oldPublicId = existingCardMap.get(localId)?.[side]?.contentPublicId;
+    if (oldPublicId) {
+      await destroyPublicIds([oldPublicId]);
+    }
+
+    const cardMongoId = cardMongoIdMap.get(localId) || localId;
+    const folder = getCardImageFolder(userId, packageId, cardMongoId);
+    const result = await uploadImageBuffer(file, {
+      folder,
+      asset_folder: folder,
+      public_id: getCloudinarySideName(side),
+    });
+
+    const sidePayload = getSidePayload(targetCard, side);
+    sidePayload.content = result.secure_url;
+    sidePayload.contentPublicId = result.public_id;
+  }
+}
+
 function normalizeSortOrder(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -172,8 +256,38 @@ export const saveCardSide = asyncHandler(async (req, res) => {
 
   const sideDocId = req.params.sideDocId;
   const { localId, side } = parseSideDocId(sideDocId);
-  const payload = cleanPayload(req.body);
+  const body = parseJsonField(req.body?.card, req.body || {});
+  const payload = cleanPayload(body);
   const nextSortOrder = normalizeSortOrder(req.body?.sortOrder, null);
+
+  const existingCard = await Card.findOne({
+    userId: req.user._id,
+    packageId: req.params.packageId,
+    localId,
+  });
+  const cardMongoId = existingCard?._id || new mongoose.Types.ObjectId();
+
+  const file = req.files?.[0];
+  if (file) {
+    const oldPublicId = existingCard?.[side]?.contentPublicId;
+    if (oldPublicId) {
+      await destroyPublicIds([oldPublicId]);
+    }
+
+    const folder = getCardImageFolder(
+      req.user._id.toString(),
+      req.params.packageId,
+      cardMongoId.toString(),
+    );
+    const result = await uploadImageBuffer(file, {
+      folder,
+      asset_folder: folder,
+      public_id: getCloudinarySideName(side),
+    });
+
+    payload.content = result.secure_url;
+    payload.contentPublicId = result.public_id;
+  }
 
   const updateData = {
     userId: req.user._id,
@@ -200,6 +314,9 @@ export const saveCardSide = asyncHandler(async (req, res) => {
     },
     {
       $set: updateData,
+      $setOnInsert: {
+        _id: cardMongoId,
+      },
     },
     {
       new: true,
@@ -225,7 +342,7 @@ export const bulkSaveCards = asyncHandler(async (req, res) => {
     });
   }
 
-  const { cards = [] } = req.body;
+  const cards = parseCardsFromRequest(req);
 
   if (!Array.isArray(cards)) {
     return res.status(400).json({
@@ -250,10 +367,43 @@ export const bulkSaveCards = asyncHandler(async (req, res) => {
     packageId: req.params.packageId,
   });
 
+  const localIds = cards
+    .map((card) => (card?.localId ? String(card.localId) : null))
+    .filter(Boolean);
+
+  const existingCards = await Card.find({
+    userId: req.user._id,
+    packageId: req.params.packageId,
+    localId: {
+      $in: localIds,
+    },
+  }).select('_id localId front.contentPublicId back.contentPublicId');
+
+  const existingCardMap = new Map(
+    existingCards.map((card) => [String(card.localId), card]),
+  );
+  const cardMongoIdMap = new Map(
+    localIds.map((localId) => [
+      localId,
+      existingCardMap.get(localId)?._id || new mongoose.Types.ObjectId(),
+    ]),
+  );
+
+  await applyDrawingUploads({
+    files: req.files || [],
+    drawingMeta: parseDrawingMetaFromRequest(req),
+    cards,
+    userId: req.user._id.toString(),
+    packageId: req.params.packageId,
+    existingCardMap,
+    cardMongoIdMap,
+  });
+
   const operations = cards
     .filter((card) => card?.localId)
     .map((card, index) => {
       const localId = String(card.localId);
+      const cardMongoId = cardMongoIdMap.get(localId);
       const frontPayload = cleanPayload(card.front || {});
       const backPayload = cleanPayload(card.back || {});
       const sortOrder = normalizeSortOrder(card.sortOrder, existingCount + index);
@@ -275,6 +425,9 @@ export const bulkSaveCards = asyncHandler(async (req, res) => {
               back: backPayload,
               sortOrder,
             },
+            $setOnInsert: {
+              _id: cardMongoId,
+            },
           },
           upsert: true,
         },
@@ -289,10 +442,6 @@ export const bulkSaveCards = asyncHandler(async (req, res) => {
   }
 
   await Card.bulkWrite(operations);
-
-  const localIds = cards
-    .map((card) => (card?.localId ? String(card.localId) : null))
-    .filter(Boolean);
 
   const savedCards = await Card.find({
     userId: req.user._id,
@@ -566,6 +715,34 @@ export const deleteFlashcardPair = asyncHandler(async (req, res) => {
       message: 'Package not found',
     });
   }
+
+  const cards = await Card.find({
+    userId: req.user._id,
+    packageId: req.params.packageId,
+    localId: req.params.localId,
+  }).select('_id front.contentPublicId back.contentPublicId');
+
+  const publicIds = cards.flatMap((card) => [
+    card.front?.contentPublicId,
+    card.back?.contentPublicId,
+  ]);
+
+  await destroyPublicIds(publicIds);
+  await Promise.all(
+    cards.map(async (card) => {
+      const cardFolder = getCardImageFolder(
+        req.user._id.toString(),
+        req.params.packageId,
+        card._id.toString(),
+      );
+
+      await deleteImagesByPrefix(cardFolder);
+      await deleteFolderIfEmpty(cardFolder);
+    }),
+  );
+  await deleteFolderIfEmpty(
+    getPackageImageFolder(req.user._id.toString(), req.params.packageId),
+  );
 
   await Card.deleteMany({
     userId: req.user._id,

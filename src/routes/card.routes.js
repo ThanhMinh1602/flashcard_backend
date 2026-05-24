@@ -9,6 +9,7 @@ import {
   saveCardSide,
 } from '../controllers/card.controller.js';
 import { authRequired } from '../middlewares/auth.js';
+import { upload } from '../middlewares/upload.js';
 
 const router = Router({
   mergeParams: true,
@@ -81,7 +82,7 @@ router.patch('/reorder', reorderFlashcards);
  *       404:
  *         description: Không tìm thấy package
  */
-router.put('/bulk', bulkSaveCards);
+router.put('/bulk', upload.array('drawings', 200), bulkSaveCards);
 
 /**
  * @swagger
@@ -117,7 +118,7 @@ router.put('/bulk', bulkSaveCards);
  *       404:
  *         description: Không tìm thấy package
  */
-router.put('/:sideDocId', saveCardSide);
+router.put('/:sideDocId', upload.array('drawings', 4), saveCardSide);
 
 /**
  * @swagger

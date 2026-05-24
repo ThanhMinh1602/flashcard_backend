@@ -7,6 +7,7 @@ import swaggerUi from 'swagger-ui-express';
 
 import { swaggerSpec } from './docs/swagger.js';
 import authRoutes from './routes/auth.routes.js';
+import backgroundRoutes from './routes/background.routes.js';
 import packageRoutes from './routes/package.routes.js';
 import cardRoutes from './routes/card.routes.js';
 import { errorHandler, notFound } from './middlewares/errorHandler.js';
@@ -66,6 +67,7 @@ app.get('/health', (req, res) => {
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use('/api/auth', authRoutes);
+app.use('/api/backgrounds', backgroundRoutes);
 app.use('/api/packages', packageRoutes);
 app.use('/api/packages/:packageId/cards', cardRoutes);
 

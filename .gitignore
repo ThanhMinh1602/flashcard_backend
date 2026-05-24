@@ -1,4 +1,6 @@
 .env
-.env.example
+.env.*
+!.env.example
 cloudrun-env.yaml
+node_modules
 *.local
