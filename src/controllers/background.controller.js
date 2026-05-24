@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Background from '../models/Background.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { created, ok } from '../utils/response.js';
@@ -11,27 +12,6 @@ import {
 
 function getUploadedFile(req, fieldName) {
   return Array.isArray(req.files?.[fieldName]) ? req.files[fieldName][0] : null;
-}
-
-function makeSafeName(file, fallback = 'background') {
-  return (
-    String(file?.originalname || fallback)
-      .replace(/\.[^.]+$/, '')
-      .replace(/[^a-zA-Z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 80) || 'background'
-  );
-}
-
-function makeFolderName(value, fallback = 'background') {
-  return (
-    String(value || fallback)
-      .trim()
-      .replace(/\.[^.]+$/, '')
-      .replace(/[^a-zA-Z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 80) || 'background'
-  );
 }
 
 function getBackgroundBaseFolder() {
@@ -71,7 +51,6 @@ export const getBackgrounds = asyncHandler(async (_req, res) => {
 export const uploadBackground = asyncHandler(async (req, res) => {
   const frontFile = getUploadedFile(req, 'frontBackground');
   const backFile = getUploadedFile(req, 'backBackground');
-  const name = String(req.body?.name || '').trim();
 
   if (!frontFile || !backFile) {
     return res.status(400).json({
@@ -80,22 +59,8 @@ export const uploadBackground = asyncHandler(async (req, res) => {
     });
   }
 
-  if (!name) {
-    return res.status(400).json({
-      success: false,
-      message: 'Background name is required',
-    });
-  }
-
-  const folderName = makeFolderName(name);
-  const existedBackground = await Background.findOne({ folderName });
-
-  if (existedBackground) {
-    return res.status(409).json({
-      success: false,
-      message: 'Background folder name already exists',
-    });
-  }
+  const backgroundId = new mongoose.Types.ObjectId();
+  const folderName = backgroundId.toString();
 
   const [frontResult, backResult] = await Promise.all([
     uploadBackgroundSide(frontFile, 'front', folderName),
@@ -103,7 +68,7 @@ export const uploadBackground = asyncHandler(async (req, res) => {
   ]);
 
   const background = await Background.create({
-    name,
+    _id: backgroundId,
     folderName,
     url: frontResult.secure_url,
     publicId: frontResult.public_id,
@@ -129,39 +94,13 @@ export const updateBackground = asyncHandler(async (req, res) => {
 
   const frontFile = getUploadedFile(req, 'frontBackground');
   const backFile = getUploadedFile(req, 'backBackground');
-  const nextName = String(req.body?.name || '').trim();
   const oldPublicIds = [];
   const hasNewFile = Boolean(frontFile || backFile);
-  const replacingBothSides = Boolean(frontFile && backFile);
-  const targetName = nextName || background.name || makeSafeName(frontFile || backFile);
   const oldFolderName = background.folderName || '';
-  const currentFolderName =
-    oldFolderName || makeFolderName(background.name || targetName);
-  const targetFolderName =
-    replacingBothSides && targetName
-      ? makeFolderName(targetName)
-      : currentFolderName;
+  const targetFolderName = oldFolderName || background._id.toString();
   const oldFolderPath = background.folderName
     ? getBackgroundFolder(background.folderName)
     : '';
-
-  if (nextName) {
-    background.name = nextName;
-  }
-
-  if (hasNewFile && targetFolderName !== background.folderName) {
-    const existedBackground = await Background.findOne({
-      _id: { $ne: background._id },
-      folderName: targetFolderName,
-    });
-
-    if (existedBackground) {
-      return res.status(409).json({
-        success: false,
-        message: 'Background folder name already exists',
-      });
-    }
-  }
 
   if (frontFile) {
     oldPublicIds.push(background.frontPublicId || background.publicId);

@@ -2,11 +2,6 @@ import mongoose from 'mongoose';
 
 const backgroundSchema = new mongoose.Schema(
   {
-    name: {
-      type: String,
-      default: '',
-      trim: true,
-    },
     folderName: {
       type: String,
       default: '',
@@ -60,7 +55,6 @@ backgroundSchema.methods.toClient = function toClient() {
 
   return {
     id: this._id.toString(),
-    name: this.name,
     folderName: this.folderName,
     url: frontUrl,
     publicId: frontPublicId,
