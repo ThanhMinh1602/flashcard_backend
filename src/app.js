@@ -9,6 +9,7 @@ import { swaggerSpec } from './docs/swagger.js';
 import authRoutes from './routes/auth.routes.js';
 import packageRoutes from './routes/package.routes.js';
 import cardRoutes from './routes/card.routes.js';
+import uploadRoutes from './routes/upload.routes.js';
 import { errorHandler, notFound } from './middlewares/errorHandler.js';
 
 const app = express();
@@ -18,7 +19,9 @@ const allowedOrigins = [
   'http://localhost:5174',
   'https://flash-card-72702.web.app',
   ...(process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',') : []),
-].map((origin) => origin.trim()).filter(Boolean);
+]
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 app.use(
   helmet({
@@ -30,7 +33,6 @@ app.use(
 app.use(
   cors({
     origin: (origin, callback) => {
-
       if (!origin) {
         return callback(null, true);
       }
@@ -68,6 +70,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api/auth', authRoutes);
 app.use('/api/packages', packageRoutes);
 app.use('/api/packages/:packageId/cards', cardRoutes);
+app.use('/api/uploads', uploadRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
