@@ -7,6 +7,12 @@ const backgroundSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    folderName: {
+      type: String,
+      default: '',
+      trim: true,
+      index: true,
+    },
     url: {
       type: String,
       default: '',
@@ -55,6 +61,7 @@ backgroundSchema.methods.toClient = function toClient() {
   return {
     id: this._id.toString(),
     name: this.name,
+    folderName: this.folderName,
     url: frontUrl,
     publicId: frontPublicId,
     frontUrl,

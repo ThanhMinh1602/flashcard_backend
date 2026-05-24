@@ -2,6 +2,8 @@ import Background from '../models/Background.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { created, ok } from '../utils/response.js';
 import {
+  deleteFolderIfEmpty,
+  deleteImagesByPrefix,
   destroyPublicIds,
   getSystemBackgroundsFolder,
   uploadImageBuffer,
@@ -21,15 +23,34 @@ function makeSafeName(file, fallback = 'background') {
   );
 }
 
-async function uploadBackgroundSide(file, side, fallbackName) {
-  const timestamp = Date.now();
-  const safeName = makeSafeName(file, fallbackName);
-  const folder = getSystemBackgroundsFolder();
+function makeFolderName(value, fallback = 'background') {
+  return (
+    String(value || fallback)
+      .trim()
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'background'
+  );
+}
+
+function getBackgroundBaseFolder() {
+  return getSystemBackgroundsFolder();
+}
+
+function getBackgroundFolder(folderName) {
+  return `${getBackgroundBaseFolder()}/${folderName}`;
+}
+
+async function uploadBackgroundSide(file, side, folderName) {
+  const folder = getBackgroundFolder(folderName);
+  const publicId = side === 'front' ? 'cardfront_image' : 'cardback_image';
 
   return uploadImageBuffer(file, {
     folder,
     asset_folder: folder,
-    public_id: `${timestamp}-${side}-${safeName}`,
+    public_id: publicId,
+    overwrite: true,
   });
 }
 
@@ -50,6 +71,7 @@ export const getBackgrounds = asyncHandler(async (_req, res) => {
 export const uploadBackground = asyncHandler(async (req, res) => {
   const frontFile = getUploadedFile(req, 'frontBackground');
   const backFile = getUploadedFile(req, 'backBackground');
+  const name = String(req.body?.name || '').trim();
 
   if (!frontFile || !backFile) {
     return res.status(400).json({
@@ -58,13 +80,31 @@ export const uploadBackground = asyncHandler(async (req, res) => {
     });
   }
 
+  if (!name) {
+    return res.status(400).json({
+      success: false,
+      message: 'Background name is required',
+    });
+  }
+
+  const folderName = makeFolderName(name);
+  const existedBackground = await Background.findOne({ folderName });
+
+  if (existedBackground) {
+    return res.status(409).json({
+      success: false,
+      message: 'Background folder name already exists',
+    });
+  }
+
   const [frontResult, backResult] = await Promise.all([
-    uploadBackgroundSide(frontFile, 'front', 'background-front'),
-    uploadBackgroundSide(backFile, 'back', 'background-back'),
+    uploadBackgroundSide(frontFile, 'front', folderName),
+    uploadBackgroundSide(backFile, 'back', folderName),
   ]);
 
   const background = await Background.create({
-    name: req.body?.name || makeSafeName(frontFile),
+    name,
+    folderName,
     url: frontResult.secure_url,
     publicId: frontResult.public_id,
     frontUrl: frontResult.secure_url,
@@ -91,18 +131,41 @@ export const updateBackground = asyncHandler(async (req, res) => {
   const backFile = getUploadedFile(req, 'backBackground');
   const nextName = String(req.body?.name || '').trim();
   const oldPublicIds = [];
+  const hasNewFile = Boolean(frontFile || backFile);
+  const replacingBothSides = Boolean(frontFile && backFile);
+  const targetName = nextName || background.name || makeSafeName(frontFile || backFile);
+  const oldFolderName = background.folderName || '';
+  const currentFolderName =
+    oldFolderName || makeFolderName(background.name || targetName);
+  const targetFolderName =
+    replacingBothSides && targetName
+      ? makeFolderName(targetName)
+      : currentFolderName;
+  const oldFolderPath = background.folderName
+    ? getBackgroundFolder(background.folderName)
+    : '';
 
   if (nextName) {
     background.name = nextName;
   }
 
+  if (hasNewFile && targetFolderName !== background.folderName) {
+    const existedBackground = await Background.findOne({
+      _id: { $ne: background._id },
+      folderName: targetFolderName,
+    });
+
+    if (existedBackground) {
+      return res.status(409).json({
+        success: false,
+        message: 'Background folder name already exists',
+      });
+    }
+  }
+
   if (frontFile) {
     oldPublicIds.push(background.frontPublicId || background.publicId);
-    const result = await uploadBackgroundSide(
-      frontFile,
-      'front',
-      background.name || 'background-front',
-    );
+    const result = await uploadBackgroundSide(frontFile, 'front', targetFolderName);
 
     background.url = result.secure_url;
     background.publicId = result.public_id;
@@ -112,14 +175,14 @@ export const updateBackground = asyncHandler(async (req, res) => {
 
   if (backFile) {
     oldPublicIds.push(background.backPublicId || background.publicId);
-    const result = await uploadBackgroundSide(
-      backFile,
-      'back',
-      background.name || 'background-back',
-    );
+    const result = await uploadBackgroundSide(backFile, 'back', targetFolderName);
 
     background.backUrl = result.secure_url;
     background.backPublicId = result.public_id;
+  }
+
+  if (hasNewFile) {
+    background.folderName = targetFolderName;
   }
 
   await background.save();
@@ -132,6 +195,10 @@ export const updateBackground = asyncHandler(async (req, res) => {
         publicId !== background.backPublicId,
     ),
   );
+
+  if (oldFolderPath && targetFolderName !== oldFolderName) {
+    await deleteFolderIfEmpty(oldFolderPath);
+  }
 
   return ok(res, background.toClient(), 'Background updated');
 });
@@ -146,7 +213,13 @@ export const deleteBackground = asyncHandler(async (req, res) => {
     });
   }
 
-  await destroyPublicIds(getBackgroundPublicIds(background));
+  if (background.folderName) {
+    const folderPath = getBackgroundFolder(background.folderName);
+    await deleteImagesByPrefix(folderPath);
+    await deleteFolderIfEmpty(folderPath);
+  } else {
+    await destroyPublicIds(getBackgroundPublicIds(background));
+  }
   await background.deleteOne();
 
   return ok(res, null, 'Background deleted');
