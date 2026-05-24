@@ -9,12 +9,30 @@ const backgroundSchema = new mongoose.Schema(
     },
     url: {
       type: String,
-      required: true,
+      default: '',
     },
     publicId: {
       type: String,
-      required: true,
-      unique: true,
+      default: '',
+      index: true,
+    },
+    frontUrl: {
+      type: String,
+      default: '',
+    },
+    backUrl: {
+      type: String,
+      default: '',
+    },
+    frontPublicId: {
+      type: String,
+      default: '',
+      index: true,
+    },
+    backPublicId: {
+      type: String,
+      default: '',
+      index: true,
     },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -29,11 +47,20 @@ const backgroundSchema = new mongoose.Schema(
 backgroundSchema.index({ createdAt: -1 });
 
 backgroundSchema.methods.toClient = function toClient() {
+  const frontUrl = this.frontUrl || this.url;
+  const backUrl = this.backUrl || this.url;
+  const frontPublicId = this.frontPublicId || this.publicId;
+  const backPublicId = this.backPublicId || this.publicId;
+
   return {
     id: this._id.toString(),
     name: this.name,
-    url: this.url,
-    publicId: this.publicId,
+    url: frontUrl,
+    publicId: frontPublicId,
+    frontUrl,
+    backUrl,
+    frontPublicId,
+    backPublicId,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

@@ -231,6 +231,18 @@ function cleanPayload(body = {}) {
   return payload;
 }
 
+function sideHasData(side = {}) {
+  return Boolean(
+    String(side?.content || '').trim() ||
+      String(side?.canvasData || '').trim() ||
+      String(side?.contentPublicId || '').trim(),
+  );
+}
+
+function validateCardPairSides(front, back) {
+  return sideHasData(front) && sideHasData(back);
+}
+
 // PUT /api/packages/:packageId/cards/:sideDocId
 //
 // Frontend vẫn gọi như cũ:
@@ -268,6 +280,16 @@ export const saveCardSide = asyncHandler(async (req, res) => {
   const cardMongoId = existingCard?._id || new mongoose.Types.ObjectId();
 
   const file = req.files?.[0];
+  if (
+    file &&
+    !sideHasData(side === 'front' ? existingCard?.back : existingCard?.front)
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: 'Both front and back sides are required',
+    });
+  }
+
   if (file) {
     const oldPublicId = existingCard?.[side]?.contentPublicId;
     if (oldPublicId) {
@@ -304,6 +326,16 @@ export const saveCardSide = asyncHandler(async (req, res) => {
     updateData.back = payload;
   } else {
     updateData.front = payload;
+  }
+
+  const nextFront = side === 'front' ? payload : existingCard?.front;
+  const nextBack = side === 'back' ? payload : existingCard?.back;
+
+  if (!validateCardPairSides(nextFront, nextBack)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Both front and back sides are required',
+    });
   }
 
   const card = await Card.findOneAndUpdate(
@@ -398,6 +430,22 @@ export const bulkSaveCards = asyncHandler(async (req, res) => {
     existingCardMap,
     cardMongoIdMap,
   });
+
+  const invalidCard = cards.find((card) => {
+    if (!card?.localId) return false;
+
+    return !validateCardPairSides(
+      cleanPayload(card.front || {}),
+      cleanPayload(card.back || {}),
+    );
+  });
+
+  if (invalidCard) {
+    return res.status(400).json({
+      success: false,
+      message: 'Both front and back sides are required',
+    });
+  }
 
   const operations = cards
     .filter((card) => card?.localId)
