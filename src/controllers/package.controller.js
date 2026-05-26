@@ -254,35 +254,36 @@ export const restorePackage = asyncHandler(async (req, res) => {
 });
 
 export const permanentlyDeletePackage = asyncHandler(async (req, res) => {
-  const pkg = await Package.findOneAndDelete({
+  const pkg = await Package.findOne({
     _id: req.params.packageId,
     userId: req.user._id,
     deletedAt: { $ne: null },
   });
-
-  if (!pkg) return res.status(404).json({ success: false, message: 'Package not found' });
 
   const cards = await Card.find({
     userId: req.user._id,
     packageId: req.params.packageId,
   }).select('_id');
 
-  await Promise.all(
-    cards.map(async (card) => {
-      const cardFolder = getCardImageFolder(
-        req.user._id.toString(),
-        req.params.packageId,
-        card._id.toString(),
-      );
+  if (!pkg && cards.length === 0) {
+    return res.status(404).json({ success: false, message: 'Package not found' });
+  }
 
-      await deleteImagesByPrefix(cardFolder);
-      await deleteFolderIfEmpty(cardFolder);
-    }),
-  );
+  for (const card of cards) {
+    const cardFolder = getCardImageFolder(
+      req.user._id.toString(),
+      req.params.packageId,
+      card._id.toString(),
+    );
+
+    await deleteImagesByPrefix(cardFolder);
+    await deleteFolderIfEmpty(cardFolder);
+  }
   await deleteFolderIfEmpty(
     getPackageImageFolder(req.user._id.toString(), req.params.packageId),
   );
 
   await Card.deleteMany({ userId: req.user._id, packageId: req.params.packageId });
+  await Package.deleteOne({ _id: req.params.packageId, userId: req.user._id });
   return ok(res, null, 'Package permanently deleted');
 });

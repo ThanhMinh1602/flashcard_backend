@@ -15,6 +15,45 @@ function ensureCloudinaryConfig() {
   }
 }
 
+const CLOUDINARY_RETRY_DELAYS = [700, 1400, 2800, 5600];
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function shouldRetryCloudinaryDelete(error) {
+  const message = String(error?.message || '').toLowerCase();
+
+  return (
+    error?.http_code === 420 ||
+    error?.http_code === 429 ||
+    message.includes('too many concurrent') ||
+    message.includes('rate limit')
+  );
+}
+
+async function withCloudinaryDeleteRetry(operation) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= CLOUDINARY_RETRY_DELAYS.length; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+
+      if (!shouldRetryCloudinaryDelete(error) || attempt === CLOUDINARY_RETRY_DELAYS.length) {
+        throw error;
+      }
+
+      await wait(CLOUDINARY_RETRY_DELAYS[attempt]);
+    }
+  }
+
+  throw lastError;
+}
+
 export function getCardImageFolder(userId, packageId, cardId) {
   const rootFolder = process.env.CLOUDINARY_ROOT_FOLDER || 'flashcard';
   const userFolder = process.env.CLOUDINARY_USERS_FOLDER || 'users';
@@ -65,14 +104,14 @@ export async function destroyPublicIds(publicIds = []) {
 
   ensureCloudinaryConfig();
 
-  await Promise.all(
-    ids.map((publicId) =>
+  for (const publicId of ids) {
+    await withCloudinaryDeleteRetry(() =>
       cloudinary.uploader.destroy(publicId, {
         resource_type: 'image',
         invalidate: true,
       }),
-    ),
-  );
+    );
+  }
 }
 
 export async function deleteImagesByPrefix(prefix) {
@@ -81,10 +120,12 @@ export async function deleteImagesByPrefix(prefix) {
   if (!prefix) return;
 
   try {
-    await cloudinary.api.delete_resources_by_prefix(prefix, {
-      resource_type: 'image',
-      invalidate: true,
-    });
+    await withCloudinaryDeleteRetry(() =>
+      cloudinary.api.delete_resources_by_prefix(prefix, {
+        resource_type: 'image',
+        invalidate: true,
+      }),
+    );
   } catch (error) {
     const message = String(error?.message || '').toLowerCase();
 

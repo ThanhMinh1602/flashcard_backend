@@ -763,18 +763,16 @@ export const deleteFlashcardPair = asyncHandler(async (req, res) => {
   ]);
 
   await destroyPublicIds(publicIds);
-  await Promise.all(
-    cards.map(async (card) => {
-      const cardFolder = getCardImageFolder(
-        req.user._id.toString(),
-        req.params.packageId,
-        card._id.toString(),
-      );
+  for (const card of cards) {
+    const cardFolder = getCardImageFolder(
+      req.user._id.toString(),
+      req.params.packageId,
+      card._id.toString(),
+    );
 
-      await deleteImagesByPrefix(cardFolder);
-      await deleteFolderIfEmpty(cardFolder);
-    }),
-  );
+    await deleteImagesByPrefix(cardFolder);
+    await deleteFolderIfEmpty(cardFolder);
+  }
   await deleteFolderIfEmpty(
     getPackageImageFolder(req.user._id.toString(), req.params.packageId),
   );
