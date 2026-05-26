@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import Background from '../models/Background.js';
+import Card from '../models/Card.js';
+import Package from '../models/Package.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { created, ok } from '../utils/response.js';
 import {
@@ -9,6 +11,8 @@ import {
   getSystemBackgroundsFolder,
   uploadImageBuffer,
 } from '../services/cloudinary.service.js';
+
+const DEFAULT_BACKGROUND_PAIR_ID = '1';
 
 function getUploadedFile(req, fieldName) {
   return Array.isArray(req.files?.[fieldName]) ? req.files[fieldName][0] : null;
@@ -40,6 +44,26 @@ function getBackgroundPublicIds(background) {
     background.backPublicId,
     background.publicId,
   ].filter(Boolean);
+}
+
+async function replaceDeletedBackgroundReferences(backgroundId, fallbackBackgroundPairId) {
+  const rawBackgroundId = backgroundId.toString();
+  const deletedBackgroundPairIds = [`system-${rawBackgroundId}`, rawBackgroundId];
+
+  await Promise.all([
+    Package.updateMany(
+      { backgroundPairId: { $in: deletedBackgroundPairIds } },
+      { $set: { backgroundPairId: fallbackBackgroundPairId } },
+    ),
+    Card.updateMany(
+      { 'front.backgroundPairId': { $in: deletedBackgroundPairIds } },
+      { $set: { 'front.backgroundPairId': fallbackBackgroundPairId } },
+    ),
+    Card.updateMany(
+      { 'back.backgroundPairId': { $in: deletedBackgroundPairIds } },
+      { $set: { 'back.backgroundPairId': fallbackBackgroundPairId } },
+    ),
+  ]);
 }
 
 export const getBackgrounds = asyncHandler(async (_req, res) => {
@@ -152,6 +176,9 @@ export const deleteBackground = asyncHandler(async (req, res) => {
     });
   }
 
+  const fallbackBackgroundPairId = DEFAULT_BACKGROUND_PAIR_ID;
+  await replaceDeletedBackgroundReferences(background._id, fallbackBackgroundPairId);
+
   if (background.folderName) {
     const folderPath = getBackgroundFolder(background.folderName);
     await deleteImagesByPrefix(folderPath);
@@ -161,5 +188,5 @@ export const deleteBackground = asyncHandler(async (req, res) => {
   }
   await background.deleteOne();
 
-  return ok(res, null, 'Background deleted');
+  return ok(res, { fallbackBackgroundPairId }, 'Background deleted');
 });
