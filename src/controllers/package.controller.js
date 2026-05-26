@@ -99,43 +99,6 @@ function getTempImportSideName(side) {
   return side === 'back' ? 'cardback' : 'cardfront';
 }
 
-function getTempImportPairs(payload = {}) {
-  const rawCards = Array.isArray(payload.cards) ? payload.cards : [];
-  const pairs = new Map();
-
-  rawCards.forEach((card) => {
-    const localId = String(
-      card?.pairId ||
-        card?.localId ||
-        String(card?.id || '').replace(/_(front|back)$/i, ''),
-    ).trim();
-
-    if (!localId) return;
-
-    if (!pairs.has(localId)) {
-      pairs.set(localId, {
-        localId,
-        sortOrder: Number.isFinite(Number(card?.sortOrder))
-          ? Number(card.sortOrder)
-          : pairs.size,
-        front: {},
-        back: {},
-      });
-    }
-
-    const pair = pairs.get(localId);
-    const side = card?.side === 'back' || String(card?.id || '').endsWith('_back')
-      ? 'back'
-      : 'front';
-
-    pair[side] = {
-      content: card?.content || '',
-    };
-  });
-
-  return [...pairs.values()];
-}
-
 function getImportPairs(payload = {}) {
   const rawCards = Array.isArray(payload?.cards)
     ? payload.cards
@@ -421,11 +384,16 @@ export const importTempHsk4Packages = asyncHandler(async (req, res) => {
 
       createdPackageIds.push(pkg._id);
 
-      const pairs = getTempImportPairs(payload);
+      const pairs = getImportPairs(payload);
       const docs = [];
 
       for (const [index, pair] of pairs.entries()) {
         const cardMongoId = new mongoose.Types.ObjectId();
+        const folder = getCardImageFolder(
+          req.user._id.toString(),
+          pkg._id.toString(),
+          cardMongoId.toString(),
+        );
         const cardDoc = {
           _id: cardMongoId,
           userId: req.user._id,
@@ -440,35 +408,46 @@ export const importTempHsk4Packages = asyncHandler(async (req, res) => {
         };
 
         for (const side of ['front', 'back']) {
-          const image = parseDataUrlImage(pair[side]?.content);
-
-          if (!image) continue;
-
-          const folder = getCardImageFolder(
-            req.user._id.toString(),
-            pkg._id.toString(),
-            cardMongoId.toString(),
-          );
-          const uploadResult = await uploadImageBuffer(
-            {
-              buffer: image.buffer,
-              mimetype: image.mimeType,
-              originalname: `${pair.localId}-${side}.png`,
-            },
-            {
-              folder,
-              asset_folder: folder,
-              public_id: getTempImportSideName(side),
-            },
-          );
-
-          uploadedPublicIds.push(uploadResult.public_id);
-          cardDoc[side] = {
+          const sourceSide = pair[side] || {};
+          const sidePayload = {
             pairId: pair.localId,
             side,
-            content: uploadResult.secure_url,
-            contentPublicId: uploadResult.public_id,
           };
+          const image = await fetchImportImage(sourceSide.content);
+
+          if (image) {
+            const uploadResult = await uploadImageBuffer(
+              {
+                buffer: image.buffer,
+                mimetype: image.mimeType,
+                originalname: `${pair.localId}-${side}.png`,
+              },
+              {
+                folder,
+                asset_folder: folder,
+                public_id: getTempImportSideName(side),
+              },
+            );
+
+            uploadedPublicIds.push(uploadResult.public_id);
+            sidePayload.content = uploadResult.secure_url;
+            sidePayload.contentPublicId = uploadResult.public_id;
+          } else {
+            sidePayload.content = '';
+          }
+
+          const clonedCanvasData = await cloneCanvasDataImages({
+            canvasData: sourceSide.canvasData,
+            folder,
+            side,
+            uploadPublicIds: uploadedPublicIds,
+          });
+
+          if (clonedCanvasData) {
+            sidePayload.canvasData = clonedCanvasData;
+          }
+
+          cardDoc[side] = sidePayload;
         }
 
         docs.push(cardDoc);
