@@ -5,6 +5,7 @@ import {
   deletePackage,
   getDeletedPackages,
   getPackages,
+  importPackage,
   importTempHsk4Packages,
   permanentlyDeletePackage,
   restorePackage,
@@ -62,6 +63,7 @@ const tempImportUpload = multer({
 router.route('/').get(getPackages).post(createPackage);
 
 router.get('/trash', getDeletedPackages);
+router.post('/import', tempImportUpload.single('package'), importPackage);
 router.post('/temp-import/hsk4', tempImportUpload.array('packages', 5), importTempHsk4Packages);
 router.patch('/:packageId/restore', restorePackage);
 router.delete('/:packageId/permanent', permanentlyDeletePackage);
