@@ -1,9 +1,11 @@
 import { Router } from 'express';
+import multer from 'multer';
 import {
   createPackage,
   deletePackage,
   getDeletedPackages,
   getPackages,
+  importTempHsk4Packages,
   permanentlyDeletePackage,
   restorePackage,
   updatePackage,
@@ -13,6 +15,24 @@ import { authRequired } from '../middlewares/auth.js';
 
 const router = Router();
 router.use(authRequired);
+
+const tempImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 80 * 1024 * 1024,
+    files: 5,
+  },
+  fileFilter: (_req, file, cb) => {
+    if (
+      file.mimetype === 'application/json' ||
+      file.originalname?.toLowerCase().endsWith('.json')
+    ) {
+      return cb(null, true);
+    }
+
+    return cb(new Error('Only JSON files are allowed'));
+  },
+});
 
 /**
  * @swagger
@@ -42,6 +62,7 @@ router.use(authRequired);
 router.route('/').get(getPackages).post(createPackage);
 
 router.get('/trash', getDeletedPackages);
+router.post('/temp-import/hsk4', tempImportUpload.array('packages', 5), importTempHsk4Packages);
 router.patch('/:packageId/restore', restorePackage);
 router.delete('/:packageId/permanent', permanentlyDeletePackage);
 

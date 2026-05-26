@@ -146,6 +146,7 @@ cardSchema.methods.toSideClient = function toSideClient(side) {
 
   return {
     id: `${this.localId}_${side}`,
+    pairId: this.localId,
     ...data,
     userId: this.userId.toString(),
     packageId: this.packageId.toString(),
