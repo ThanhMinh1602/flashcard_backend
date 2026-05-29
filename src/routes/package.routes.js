@@ -3,6 +3,7 @@ import multer from 'multer';
 import {
   createPackage,
   deletePackage,
+  exportPackage,
   getDeletedPackages,
   getPackages,
   importPackage,
@@ -20,18 +21,21 @@ router.use(authRequired);
 const tempImportUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 80 * 1024 * 1024,
+    fileSize: 200 * 1024 * 1024,
     files: 5,
   },
   fileFilter: (_req, file, cb) => {
     if (
       file.mimetype === 'application/json' ||
-      file.originalname?.toLowerCase().endsWith('.json')
+      file.mimetype === 'application/zip' ||
+      file.mimetype === 'application/x-zip-compressed' ||
+      file.originalname?.toLowerCase().endsWith('.json') ||
+      file.originalname?.toLowerCase().endsWith('.zip')
     ) {
       return cb(null, true);
     }
 
-    return cb(new Error('Only JSON files are allowed'));
+    return cb(new Error('Only JSON or ZIP files are allowed'));
   },
 });
 
@@ -67,6 +71,7 @@ router.post('/import', tempImportUpload.single('package'), importPackage);
 router.post('/temp-import/hsk4', tempImportUpload.array('packages', 5), importTempHsk4Packages);
 router.patch('/:packageId/restore', restorePackage);
 router.delete('/:packageId/permanent', permanentlyDeletePackage);
+router.get('/:packageId/export', exportPackage);
 
 /**
  * @swagger

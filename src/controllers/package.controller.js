@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import crypto from 'crypto';
+import { createRequire } from 'module';
 import { z } from 'zod';
 import Package from '../models/Package.js';
 import Card from '../models/Card.js';
@@ -13,10 +15,80 @@ import {
   uploadImageBuffer,
 } from '../services/cloudinary.service.js';
 
+const require = createRequire(import.meta.url);
+const archiver = require('archiver');
+const unzipper = require('unzipper');
+
 const packageSchema = z.object({
   name: z.string().optional().default(''),
   description: z.string().optional().default(''),
 });
+
+const EXPORT_SCHEMA = 'plashcard-package-export';
+const EXPORT_VERSION = 2;
+const ASSET_REF_TYPE = 'asset';
+const MAX_IMPORT_ASSET_BYTES = 25 * 1024 * 1024;
+
+function safeExportFileName(value = '') {
+  return String(value || 'flashcard-package')
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '-')
+    .slice(0, 80) || 'flashcard-package';
+}
+
+function asciiHeaderFileName(value = '') {
+  return safeExportFileName(value)
+    .normalize('NFKD')
+    .replace(/[^\x20-\x7E]+/g, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'flashcard-package';
+}
+
+function contentDispositionAttachment(fileName) {
+  const utf8Name = `${safeExportFileName(fileName)}.zip`;
+  const asciiName = `${asciiHeaderFileName(fileName)}.zip`;
+
+  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(utf8Name)}`;
+}
+
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function extensionFromMimeType(mimeType = '') {
+  const normalized = String(mimeType).toLowerCase();
+
+  if (normalized === 'image/jpeg' || normalized === 'image/jpg') return 'jpg';
+  if (normalized === 'image/png') return 'png';
+  if (normalized === 'image/webp') return 'webp';
+  if (normalized === 'image/gif') return 'gif';
+  if (normalized === 'image/svg+xml') return 'svg';
+
+  return 'bin';
+}
+
+function isZipPackage(file = {}) {
+  const name = String(file.originalname || '').toLowerCase();
+  const mimeType = String(file.mimetype || '').toLowerCase();
+
+  return (
+    name.endsWith('.zip') ||
+    mimeType === 'application/zip' ||
+    mimeType === 'application/x-zip-compressed'
+  );
+}
+
+function isAssetReference(value) {
+  return (
+    value &&
+    typeof value === 'object' &&
+    value.type === ASSET_REF_TYPE &&
+    typeof value.path === 'string'
+  );
+}
 
 function parseDataUrlImage(value = '') {
   const match = String(value).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
@@ -95,6 +167,240 @@ async function fetchImportImage(value = '') {
   };
 }
 
+async function collectPackageAsset(value, assetsBySource, assetsById) {
+  if (isAssetReference(value)) return value;
+
+  const source = typeof value === 'string' ? value.trim() : '';
+  if (!source) return value;
+
+  const image = await fetchImportImage(source);
+  if (!image) return value;
+
+  const hash = sha256(image.buffer);
+  const assetId = `sha256-${hash}`;
+  const extension = extensionFromMimeType(image.mimeType);
+  const assetPath = `assets/${assetId}.${extension}`;
+
+  if (!assetsById.has(assetId)) {
+    assetsById.set(assetId, {
+      id: assetId,
+      path: assetPath,
+      mimeType: image.mimeType,
+      size: image.buffer.length,
+      buffer: image.buffer,
+    });
+  }
+
+  const ref = {
+    type: ASSET_REF_TYPE,
+    assetId,
+    path: assetPath,
+    mimeType: image.mimeType,
+    size: image.buffer.length,
+  };
+
+  if (isHttpUrl(source)) {
+    ref.originalUrl = source;
+  }
+
+  assetsBySource.set(source, ref);
+  return ref;
+}
+
+async function referencePackageAsset(value, assetsBySource, assetsById) {
+  const source = typeof value === 'string' ? value.trim() : '';
+
+  if (source && assetsBySource.has(source)) {
+    return assetsBySource.get(source);
+  }
+
+  return collectPackageAsset(value, assetsBySource, assetsById);
+}
+
+async function referenceCanvasDataAssets(canvasData, assetsBySource, assetsById) {
+  const actions = parseCanvasActions(canvasData);
+  if (actions.length === 0) return null;
+
+  const nextActions = [];
+
+  for (const action of actions) {
+    const clonedAction = { ...action };
+
+    if (action?.type === 'image' && action.dataUrl) {
+      const assetRef = await referencePackageAsset(
+        action.dataUrl,
+        assetsBySource,
+        assetsById,
+      );
+
+      if (isAssetReference(assetRef)) {
+        clonedAction.asset = assetRef;
+        clonedAction.originalDataUrl = action.dataUrl;
+        delete clonedAction.dataUrl;
+      }
+    }
+
+    nextActions.push(clonedAction);
+  }
+
+  return JSON.stringify(nextActions);
+}
+
+async function buildExportPackagePayload(pkg, cards) {
+  const assetsBySource = new Map();
+  const assetsById = new Map();
+  const exportedCards = [];
+
+  for (const card of cards) {
+    const cardPayload = card.toPairClient();
+
+    for (const side of ['front', 'back']) {
+      const sidePayload = { ...(cardPayload[side] || {}) };
+
+      sidePayload.content = await referencePackageAsset(
+        sidePayload.content,
+        assetsBySource,
+        assetsById,
+      );
+
+      const canvasData = await referenceCanvasDataAssets(
+        sidePayload.canvasData,
+        assetsBySource,
+        assetsById,
+      );
+
+      if (canvasData) {
+        sidePayload.canvasData = canvasData;
+      }
+
+      cardPayload[side] = sidePayload;
+    }
+
+    exportedCards.push(cardPayload);
+  }
+
+  const assets = [...assetsById.values()];
+
+  return {
+    manifest: {
+      schema: EXPORT_SCHEMA,
+      version: EXPORT_VERSION,
+      exportedAt: new Date().toISOString(),
+      dataFile: 'data.json',
+      assetCount: assets.length,
+      assets: assets.map(({ buffer, ...asset }) => asset),
+    },
+    data: {
+      schema: EXPORT_SCHEMA,
+      version: EXPORT_VERSION,
+      package: {
+        name: pkg.name || '',
+        description: pkg.description || '',
+        backgroundPairId: pkg.backgroundPairId || '1',
+      },
+      cards: exportedCards,
+    },
+    assets,
+  };
+}
+
+async function writeExportZip(res, { manifest, data, assets }) {
+  const archive = new archiver.ZipArchive({ zlib: { level: 9 } });
+
+  const finished = new Promise((resolve, reject) => {
+    archive.on('error', reject);
+    res.on('finish', resolve);
+    res.on('close', resolve);
+  });
+
+  archive.pipe(res);
+  archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+  archive.append(JSON.stringify(data, null, 2), { name: 'data.json' });
+
+  for (const asset of assets) {
+    archive.append(asset.buffer, { name: asset.path });
+  }
+
+  await archive.finalize();
+  await finished;
+}
+
+async function parseZipPackage(buffer) {
+  const directory = await unzipper.Open.buffer(buffer);
+  const entries = new Map(directory.files.map((entry) => [entry.path, entry]));
+  const manifestEntry = entries.get('manifest.json');
+  const dataEntry = entries.get('data.json');
+
+  if (!manifestEntry || !dataEntry) {
+    throw new Error('Invalid package archive: missing manifest.json or data.json');
+  }
+
+  const manifest = JSON.parse((await manifestEntry.buffer()).toString('utf8'));
+  const data = JSON.parse((await dataEntry.buffer()).toString('utf8'));
+
+  if (manifest?.schema !== EXPORT_SCHEMA || Number(manifest?.version) !== EXPORT_VERSION) {
+    throw new Error('Unsupported package archive version');
+  }
+
+  const assetFiles = new Map();
+  const manifestAssets = Array.isArray(manifest.assets) ? manifest.assets : [];
+
+  for (const asset of manifestAssets) {
+    const assetPath = String(asset?.path || '');
+
+    if (!assetPath.startsWith('assets/') || assetPath.includes('..')) {
+      throw new Error('Invalid asset path in package archive');
+    }
+
+    const entry = entries.get(assetPath);
+    if (!entry) {
+      throw new Error(`Missing asset file: ${assetPath}`);
+    }
+
+    const assetBuffer = await entry.buffer();
+
+    if (assetBuffer.length > MAX_IMPORT_ASSET_BYTES) {
+      throw new Error(`Imported image is too large: ${assetPath}`);
+    }
+
+    const expectedAssetId = String(asset.assetId || asset.id || '');
+    const actualAssetId = `sha256-${sha256(assetBuffer)}`;
+
+    if (expectedAssetId && expectedAssetId !== actualAssetId) {
+      throw new Error(`Asset checksum mismatch: ${assetPath}`);
+    }
+
+    assetFiles.set(assetPath, {
+      buffer: assetBuffer,
+      mimeType: String(asset.mimeType || 'application/octet-stream'),
+      originalname: assetPath.split('/').pop() || 'asset',
+    });
+  }
+
+  return { payload: data, assetFiles };
+}
+
+async function resolveImportImage(value, assetFiles = null) {
+  if (isAssetReference(value)) {
+    const asset = assetFiles?.get(value.path);
+    if (!asset) {
+      throw new Error(`Missing imported image asset: ${value.path}`);
+    }
+
+    if (!asset.mimeType.startsWith('image/')) {
+      throw new Error('Imported asset is not an image');
+    }
+
+    return {
+      buffer: asset.buffer,
+      mimeType: asset.mimeType,
+      originalname: asset.originalname,
+    };
+  }
+
+  return fetchImportImage(value);
+}
+
 function getTempImportSideName(side) {
   return side === 'back' ? 'cardback' : 'cardfront';
 }
@@ -167,6 +473,7 @@ async function cloneCanvasDataImages({
   folder,
   side,
   uploadPublicIds,
+  assetFiles = null,
 }) {
   const actions = parseCanvasActions(canvasData);
 
@@ -177,15 +484,15 @@ async function cloneCanvasDataImages({
   for (const [index, action] of actions.entries()) {
     const clonedAction = { ...action };
 
-    if (action?.type === 'image' && action.dataUrl) {
-      const image = await fetchImportImage(action.dataUrl);
+    if (action?.type === 'image' && (action.dataUrl || action.asset)) {
+      const image = await resolveImportImage(action.asset || action.dataUrl, assetFiles);
 
       if (image) {
         const uploadResult = await uploadImageBuffer(
           {
             buffer: image.buffer,
             mimetype: image.mimeType,
-            originalname: `${side}-layer-${index}.png`,
+            originalname: image.originalname || `${side}-layer-${index}.png`,
           },
           {
             folder,
@@ -196,6 +503,8 @@ async function cloneCanvasDataImages({
 
         uploadPublicIds.push(uploadResult.public_id);
         clonedAction.dataUrl = uploadResult.secure_url;
+        delete clonedAction.asset;
+        delete clonedAction.originalDataUrl;
       }
     }
 
@@ -211,13 +520,42 @@ async function cleanupTempImport(packageIds = [], publicIds = []) {
   await Package.deleteMany({ _id: { $in: packageIds } });
 }
 
+export const exportPackage = asyncHandler(async (req, res) => {
+  const pkg = await Package.findOne({
+    _id: req.params.packageId,
+    userId: req.user._id,
+    deletedAt: null,
+  });
+
+  if (!pkg) {
+    return res.status(404).json({
+      success: false,
+      message: 'Package not found',
+    });
+  }
+
+  const cards = await Card.find({
+    userId: req.user._id,
+    packageId: req.params.packageId,
+  }).sort({ sortOrder: 1, createdAt: 1 });
+
+  const payload = await buildExportPackagePayload(pkg, cards);
+  const fileName = pkg.name || pkg._id.toString();
+
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', contentDispositionAttachment(fileName));
+  res.setHeader('Cache-Control', 'no-store');
+
+  await writeExportZip(res, payload);
+});
+
 export const importPackage = asyncHandler(async (req, res) => {
   const file = Array.isArray(req.files) ? req.files[0] : req.file;
 
   if (!file) {
     return res.status(400).json({
       success: false,
-      message: 'Please choose a JSON file',
+      message: 'Please choose a JSON or ZIP file',
     });
   }
 
@@ -225,12 +563,17 @@ export const importPackage = asyncHandler(async (req, res) => {
   const uploadedPublicIds = [];
 
   try {
-    const payload = JSON.parse(file.buffer.toString('utf8'));
+    const parsedPackage = isZipPackage(file)
+      ? await parseZipPackage(file.buffer)
+      : { payload: JSON.parse(file.buffer.toString('utf8')), assetFiles: null };
+    const { payload, assetFiles } = parsedPackage;
     const packageData = payload?.package || {};
     const pkg = await Package.create({
       userId: req.user._id,
       name: `${String(
-        packageData.name || file.originalname?.replace(/\.json$/i, '') || 'Imported package',
+        packageData.name ||
+          file.originalname?.replace(/\.(json|zip)$/i, '') ||
+          'Imported package',
       ).trim()} (import)`,
       description: String(packageData.description || '').trim(),
       backgroundPairId: String(packageData.backgroundPairId || '1'),
@@ -267,14 +610,14 @@ export const importPackage = asyncHandler(async (req, res) => {
           pairId: pair.localId,
           side,
         };
-        const image = await fetchImportImage(sourceSide.content);
+        const image = await resolveImportImage(sourceSide.content, assetFiles);
 
         if (image) {
           const uploadResult = await uploadImageBuffer(
             {
               buffer: image.buffer,
               mimetype: image.mimeType,
-              originalname: `${pair.localId}-${side}.png`,
+              originalname: image.originalname || `${pair.localId}-${side}.png`,
             },
             {
               folder,
@@ -295,6 +638,7 @@ export const importPackage = asyncHandler(async (req, res) => {
           folder,
           side,
           uploadPublicIds: uploadedPublicIds,
+          assetFiles,
         });
 
         if (clonedCanvasData) {
