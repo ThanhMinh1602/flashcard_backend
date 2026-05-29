@@ -1,8 +1,5 @@
 # deploy-only-cloud-run.ps1
-# Deploy code to Google Cloud Run without changing existing environment variables.
-# Put this file inside your flashcard_backend folder, then drag it into PowerShell or run:
-#   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-#   .\deploy-only-cloud-run.ps1
+# Deploy code to Google Cloud Run and update environment variables from .env file
 
 $ErrorActionPreference = "Stop"
 
@@ -12,6 +9,7 @@ $defaultServiceName = "flashcard-backend"
 $defaultRegion = "asia-southeast1"
 $defaultTimeout = "300"
 
+# ===== FUNCTIONS =====
 function Write-Step($message) {
   Write-Host ""
   Write-Host "==> $message" -ForegroundColor Cyan
@@ -53,7 +51,7 @@ $gcloudCmd = Get-Command gcloud -ErrorAction SilentlyContinue
 if ($null -eq $gcloudCmd) {
   throw "Chua cai Google Cloud CLI. Cai xong roi mo PowerShell lai: https://cloud.google.com/sdk/docs/install"
 }
-gcloud --version
+gcloud --version | Select-Object -First 1 | Write-Ok
 
 Write-Step "Kiem tra account dang login"
 $activeAccount = (gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>$null)
@@ -71,10 +69,12 @@ $region = Read-WithDefault "Region" $defaultRegion
 $timeout = Read-WithDefault "Timeout seconds" $defaultTimeout
 
 Write-Step "Set project"
-gcloud config set project $projectId
+gcloud config set project $projectId | Out-Null
+Write-Ok "Da set project thanh $projectId"
 
 Write-Step "Bat API can thiet neu chua bat"
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com | Out-Null
+Write-Ok "Da kiem tra/bat cac API can thiet"
 
 Write-Step "Tao/CAP NHAT .gcloudignore de upload source gon hon"
 $ignoreContent = @"
@@ -97,46 +97,71 @@ if (!(Test-Path ".gcloudignore")) {
   Write-Ok ".gcloudignore da ton tai, giu nguyen file hien tai"
 }
 
+Write-Step "Chuan bi bien moi truong tu file .env"
+$envString = ""
+if (Test-Path ".env") {
+    $envLines = Get-Content ".env"
+    $validEnvs = @()
+    foreach ($line in $envLines) {
+        $line = $line.Trim()
+        # Bỏ qua dòng trống, dòng comment (#) và biến PORT
+        if ($line -ne "" -and !$line.StartsWith("#") -and !$line.StartsWith("PORT=")) {
+            $validEnvs += $line
+        }
+    }
+    $envString = $validEnvs -join ","
+    Write-Ok "Da doc xong cac bien tu .env (da bo qua PORT)"
+} else {
+    Write-Warn "Khong tim thay file .env, se deploy ma khong kem env."
+}
+
 Write-Step "Deploy Cloud Run"
 Write-Host "Service: $serviceName"
 Write-Host "Project: $projectId"
 Write-Host "Region : $region"
 Write-Host ""
-Write-Warn "Lenh nay chi deploy code moi, KHONG thay doi env da config tren Cloud Run."
 
 try {
-  gcloud run deploy $serviceName `
-    --source . `
-    --region $region `
-    --allow-unauthenticated `
-    --timeout $timeout
+    if ([string]::IsNullOrWhiteSpace($envString)) {
+        gcloud run deploy $serviceName `
+            --source . `
+            --region $region `
+            --allow-unauthenticated `
+            --timeout $timeout
+    } else {
+        gcloud run deploy $serviceName `
+            --source . `
+            --region $region `
+            --allow-unauthenticated `
+            --timeout $timeout `
+            --update-env-vars=$envString
+    }
 
-  Write-Step "Lay URL service"
-  $serviceUrl = (gcloud run services describe $serviceName `
-    --region $region `
-    --format "value(status.url)").Trim()
+    Write-Step "Lay URL service"
+    $serviceUrl = (gcloud run services describe $serviceName `
+        --region $region `
+        --format "value(status.url)").Trim()
 
-  if ([string]::IsNullOrWhiteSpace($serviceUrl)) {
-    Write-Warn "Deploy xong nhung chua lay duoc URL. Vao Cloud Run Console de xem service."
-  } else {
-    Write-Host ""
-    Write-Host "DEPLOY THANH CONG!" -ForegroundColor Green
-    Write-Host "API URL      : $serviceUrl" -ForegroundColor Green
-    Write-Host "Health check : $serviceUrl/health" -ForegroundColor Green
-    Write-Host "Swagger      : $serviceUrl/api-docs" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Frontend .env:"
-    Write-Host "VITE_API_BASE_URL=$serviceUrl/api" -ForegroundColor Yellow
-  }
+    if ([string]::IsNullOrWhiteSpace($serviceUrl)) {
+        Write-Warn "Deploy xong nhung chua lay duoc URL. Vao Cloud Run Console de xem service."
+    } else {
+        Write-Host ""
+        Write-Host "DEPLOY THANH CONG!" -ForegroundColor Green
+        Write-Host "API URL      : $serviceUrl" -ForegroundColor Green
+        Write-Host "Health check : $serviceUrl/health" -ForegroundColor Green
+        Write-Host "Swagger      : $serviceUrl/api-docs" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Frontend .env:"
+        Write-Host "VITE_API_BASE_URL=$serviceUrl/api" -ForegroundColor Yellow
+    }
 }
 catch {
-  Write-Host ""
-  Write-Host "DEPLOY THAT BAI!" -ForegroundColor Red
-  Write-Host $_.Exception.Message -ForegroundColor Red
-  Write-Host ""
-  Write-Host "Doc logs bang lenh:" -ForegroundColor Yellow
-  Write-Host "gcloud run services logs read $serviceName --region $region --limit=100" -ForegroundColor Yellow
-  throw
+    Write-Host ""
+    Write-Host "DEPLOY THAT BAI!" -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Doc logs bang lenh:" -ForegroundColor Yellow
+    Write-Host "gcloud run services logs read $serviceName --region $region --limit=100" -ForegroundColor Yellow
 }
 
 Write-Host ""
