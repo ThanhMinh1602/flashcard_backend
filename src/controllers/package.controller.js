@@ -22,6 +22,7 @@ const unzipper = require('unzipper');
 const packageSchema = z.object({
   name: z.string().optional().default(''),
   description: z.string().optional().default(''),
+  editorMode: z.enum(['draw', 'text']).optional().default('draw'),
 });
 
 const EXPORT_SCHEMA = 'plashcard-package-export';
@@ -577,6 +578,7 @@ export const importPackage = asyncHandler(async (req, res) => {
       ).trim()} (import)`,
       description: String(packageData.description || '').trim(),
       backgroundPairId: String(packageData.backgroundPairId || '1'),
+      editorMode: packageData.editorMode === 'text' ? 'text' : 'draw',
     });
 
     createdPackageIds.push(pkg._id);
@@ -693,6 +695,7 @@ export const createPackage = asyncHandler(async (req, res) => {
     userId: req.user._id,
     name: body.name?.trim() || '',
     description: body.description?.trim() || '',
+    editorMode: body.editorMode || 'draw',
     backgroundPairId: '1',
   });
   return created(res, { id: pkg._id.toString(), package: pkg.toClient() });
@@ -724,6 +727,7 @@ export const importTempHsk4Packages = asyncHandler(async (req, res) => {
           'HSK4 import',
         description: String(packageData.description || '').trim(),
         backgroundPairId: String(packageData.backgroundPairId || '1'),
+        editorMode: packageData.editorMode === 'text' ? 'text' : 'draw',
       });
 
       createdPackageIds.push(pkg._id);

@@ -6,6 +6,11 @@ const packageSchema = new mongoose.Schema(
     name: { type: String, default: '', trim: true },
     description: { type: String, default: '', trim: true },
     backgroundPairId: { type: String, default: '1' },
+    editorMode: {
+      type: String,
+      enum: ['draw', 'text'],
+      default: 'draw',
+    },
     deletedAt: { type: Date, default: null, index: true },
   },
   { timestamps: true }
@@ -19,6 +24,7 @@ packageSchema.methods.toClient = function toClient() {
     name: this.name,
     description: this.description,
     backgroundPairId: this.backgroundPairId,
+    editorMode: this.editorMode || 'draw',
     deletedAt: this.deletedAt,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
