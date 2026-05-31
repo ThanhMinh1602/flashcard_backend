@@ -2,6 +2,7 @@ const MAX_CANVAS_ACTIONS = 800;
 const MAX_POINTS_PER_STROKE = 6000;
 const MAX_TOTAL_POINTS_PER_SIDE = 50000;
 const MAX_CANVAS_DATA_SIZE = 750000;
+const MAX_TEXT_LENGTH = 5000;
 
 const DATA_IMAGE_PATTERN = /^data:image\/[a-zA-Z0-9.+-]+;base64,/;
 
@@ -28,6 +29,16 @@ function roundNumber(value, fallback = 0) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.round(number * 10) / 10;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(Math.max(number, min), max);
+}
+
+function oneOf(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
 }
 
 function sanitizePoint(point) {
@@ -106,6 +117,48 @@ function sanitizeLegacyImage(action, index) {
   };
 }
 
+function sanitizeText(action, index) {
+  const text = String(action?.text || '').slice(0, MAX_TEXT_LENGTH);
+  if (!text.trim()) return null;
+
+  const now = Date.now();
+  const createdAt = Number.isFinite(Number(action.createdAt))
+    ? Number(action.createdAt)
+    : now;
+
+  return {
+    type: 'text',
+    id: String(action.id || `text_${createdAt}_${index}`).slice(0, 80),
+    text,
+    x: roundNumber(action.x),
+    y: roundNumber(action.y),
+    width: clampNumber(action.width, 20, 4000, 500),
+    height: clampNumber(action.height, 20, 4000, 80),
+    fontFamily: String(action.fontFamily || 'Arial').slice(0, 80),
+    fontSize: clampNumber(action.fontSize, 8, 200, 36),
+    fontWeight: oneOf(action.fontWeight, ['normal', 'bold'], 'bold'),
+    fontStyle: oneOf(action.fontStyle, ['normal', 'italic'], 'normal'),
+    textDecoration: oneOf(action.textDecoration, ['none', 'underline'], 'none'),
+    color: String(action.color || '#000000').slice(0, 32),
+    backgroundColor: String(action.backgroundColor || 'transparent').slice(0, 32),
+    borderColor: String(action.borderColor || 'transparent').slice(0, 32),
+    borderWidth: clampNumber(action.borderWidth, 0, 20, 0),
+    align: oneOf(action.align, ['left', 'center', 'right'], 'left'),
+    lineHeight: clampNumber(action.lineHeight, 0.8, 3, 1.2),
+    letterSpacing: clampNumber(action.letterSpacing, -5, 50, 0),
+    opacity: clampNumber(action.opacity, 0, 1, 1),
+    rotation: clampNumber(action.rotation, -360, 360, 0),
+    scaleX: clampNumber(action.scaleX, 0.1, 10, 1),
+    scaleY: clampNumber(action.scaleY, 0.1, 10, 1),
+    locked: Boolean(action.locked),
+    zIndex: Number.isFinite(Number(action.zIndex)) ? Number(action.zIndex) : index,
+    createdAt,
+    updatedAt: Number.isFinite(Number(action.updatedAt))
+      ? Number(action.updatedAt)
+      : createdAt,
+  };
+}
+
 export function sanitizeCanvasData(canvasData) {
   const parsed = parseCanvasData(canvasData).slice(0, MAX_CANVAS_ACTIONS);
   const totalPointBudget = { count: 0 };
@@ -118,6 +171,10 @@ export function sanitizeCanvasData(canvasData) {
 
       if (action?.type === 'image') {
         return sanitizeLegacyImage(action, index);
+      }
+
+      if (action?.type === 'text') {
+        return sanitizeText(action, index);
       }
 
       return null;
